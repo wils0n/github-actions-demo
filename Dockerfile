@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 # Metadata de la imagen
-LABEL maintainer="tu-email@ejemplo.com"
+LABEL maintainer="wilson@mejia.io"
 LABEL description="GitHub Actions Demo - Python CI/CD"
 
 # Establecer directorio de trabajo
