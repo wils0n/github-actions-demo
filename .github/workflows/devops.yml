@@ -49,3 +49,32 @@ jobs:
         with:
           name: build-info
           path: build-info.txt
+
+  # JOB 2: Empaquetado (Bash) — depende del job de tests (secuencial)
+  package:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # STEP: Usar el output del job anterior
+      - name: Read tag from previous job
+        run: echo "TAG = ${{ needs.test.outputs.meta_tag }}"
+        env:
+          # Exponemos el output del step meta como output de job usando needs.<job>.outputs.<name>
+          # Para eso definimos outputs del job test abajo (ver 'outputs:' en job test)
+          TAG: ${{ needs.test.outputs.build_tag }}
+
+      # STEP: Crear artefacto zip (Bash puro)
+      - name: Create zip
+        run: |
+          mkdir -p dist
+          cp hello.py dist/
+          zip -r "dist/app-${{ needs.test.outputs.build_tag }}.zip" dist
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-zip
+          path: dist/*.zip
