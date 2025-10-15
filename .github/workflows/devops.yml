@@ -78,3 +78,13 @@ jobs:
         with:
           name: app-zip
           path: dist/*.zip
+
+  # JOB 3: Tareas rápidas en paralelo (Bash) — NO depende de nadie
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Echo info (Bash)
+        run: |
+          echo "Repo: $GITHUB_REPOSITORY"
+          echo "Evento: $GITHUB_EVENT_NAME"
+          echo "Runner: $RUNNER_OS"
