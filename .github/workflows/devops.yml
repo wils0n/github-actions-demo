@@ -1,0 +1,7 @@
+name: CI básico Python + Bash
+run-name: "CI disparado por ${{ github.actor }}"
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
