@@ -1,56 +1,70 @@
-name: CI básico Python + Bash
-run-name: "CI disparado por ${{ github.actor }}"
+name: CI/CD Pipeline con Docker
+run-name: "Pipeline ejecutado por ${{ github.actor }} en ${{ github.ref_name }}"
 
 on:
   push:
     branches: [ main ]
   pull_request:
+    branches: [ main ]
+
+env:
+  PYTHON_VERSION: "3.11"
 
 jobs:
-  # JOB 1: Validación (Python) — corre en Ubuntu hospedado por GitHub
+  # ========================================
+  # JOB 1: TEST (ya existe del lab anterior)
+  # ========================================
   test:
     runs-on: ubuntu-latest
+    outputs:
+      build_tag: ${{ steps.meta.outputs.tag }}
     steps:
-      # STEP: Trae el código al runner
       - name: Checkout
         uses: actions/checkout@v4
 
-      # STEP: Configura Python (action oficial)
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
 
-       # STEP: Instala dependencias (Bash)
-      - name: Install deps
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: pip-${{ runner.os }}-
+
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # STEP: Ejecuta pruebas (Bash llamando a Python)
       - name: Run tests
         run: |
           export PYTHONPATH="${PYTHONPATH}:$(pwd)"
           pytest -q
 
-      # STEP: Crear un “output” del job usando GITHUB_OUTPUT (Bash)
       - name: Compute build tag
         id: meta
         run: |
           TS=$(date +%Y%m%d-%H%M%S)
           echo "tag=${TS}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
-      # STEP: Publicar un artefacto con el reporte (ejemplo)
-      - name: Save artifact (sample log)
+      - name: Save build info
         run: |
           echo "Build tag: ${{ steps.meta.outputs.tag }}" > build-info.txt
+          echo "Commit: ${{ github.sha }}" >> build-info.txt
+          echo "Branch: ${{ github.ref_name }}" >> build-info.txt
+
       - name: Upload build info artifact
         uses: actions/upload-artifact@v4
         with:
           name: build-info
           path: build-info.txt
 
-  # JOB 2: Empaquetado (Bash) — depende del job de tests (secuencial)
+  # ========================================
+  # JOB 2: PACKAGE (ya existe del lab anterior)
+  # ========================================
   package:
     needs: test
     runs-on: ubuntu-latest
@@ -58,20 +72,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # STEP: Usar el output del job anterior
       - name: Read tag from previous job
-        run: echo "TAG = ${{ needs.test.outputs.meta_tag }}"
-        env:
-          # Exponemos el output del step meta como output de job usando needs.<job>.outputs.<name>
-          # Para eso definimos outputs del job test abajo (ver 'outputs:' en job test)
-          TAG: ${{ needs.test.outputs.build_tag }}
+        run: echo "TAG = ${{ needs.test.outputs.build_tag }}"
 
-      # STEP: Crear artefacto zip (Bash puro)
-      - name: Create zip
+      - name: Create zip package
         run: |
           mkdir -p dist
           cp hello.py dist/
-          zip -r "dist/app-${{ needs.test.outputs.build_tag }}.zip" dist
+          cp requirements.txt dist/
+          zip -r "dist/app-${{ needs.test.outputs.build_tag }}.zip" dist/
 
       - name: Upload package
         uses: actions/upload-artifact@v4
@@ -79,12 +88,79 @@ jobs:
           name: app-zip
           path: dist/*.zip
 
-  # JOB 3: Tareas rápidas en paralelo (Bash) — NO depende de nadie
+  # ========================================
+  # JOB 3: DOCS (ya existe del lab anterior)
+  # ========================================
   docs:
     runs-on: ubuntu-latest
     steps:
-      - name: Echo info (Bash)
+      - name: Echo repository info
         run: |
-          echo "Repo: $GITHUB_REPOSITORY"
+          echo "Repositorio: $GITHUB_REPOSITORY"
           echo "Evento: $GITHUB_EVENT_NAME"
-          echo "Runner: $RUNNER_OS"
+          echo "Runner OS: $RUNNER_OS"
+          echo "Actor: $GITHUB_ACTOR"
+
+  # ========================================
+  # JOB 4: DOCKER (🆕 NUEVO)
+  # ========================================
+  docker:
+    needs: test  # Espera a que test termine exitosamente
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'  # Solo en push a main
+    
+    steps:
+      # STEP 1: Checkout del código
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # STEP 2: Setup Docker Buildx (mejora el build de imágenes)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # STEP 3: Login a Docker Hub
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # STEP 4: Extraer metadata para tags
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/github-actions-demo
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ needs.test.outputs.build_tag }}
+
+      # STEP 5: Build y Push de la imagen Docker
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/github-actions-demo:buildcache
+          cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/github-actions-demo:buildcache,mode=max
+
+      # STEP 6: Generar resumen del build
+      - name: Image summary
+        run: |
+          echo "## 🐳 Docker Build Exitoso" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Imagen publicada:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ secrets.DOCKERHUB_USERNAME }}/github-actions-demo:latest" >> $GITHUB_STEP_SUMMARY
+          echo "${{ secrets.DOCKERHUB_USERNAME }}/github-actions-demo:${{ needs.test.outputs.build_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Pull de la imagen:**" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ secrets.DOCKERHUB_USERNAME }}/github-actions-demo:latest" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
