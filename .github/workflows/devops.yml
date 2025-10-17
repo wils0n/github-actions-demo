@@ -28,7 +28,7 @@ jobs:
           black --check .
           isort --check-only .
   test:
-    needs: test
+    needs: lint
     runs-on: ubuntu-latest
     outputs:
       build_tag: ${{ steps.meta.outputs.tag }}
